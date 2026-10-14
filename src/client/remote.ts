@@ -39,7 +39,7 @@ export interface Health {
 export interface BrowserProfile { id: string; alias?: string; connected: boolean; isDefault: boolean }
 export interface OpenCliDiscovery { found: boolean; executable: string; version: string; error?: string }
 export interface PackageUpdateStatus {
-  currentVersion: string; latestVersion: string; updateAvailable: boolean; checkedAt: number; releaseNotes?: string; releaseUrl?: string; error?: string
+  currentVersion: string; latestVersion: string; updateAvailable: boolean; checkedAt: number; releaseNotes?: string; releaseUrl?: string; error?: string; managedFork?: boolean
 }
 export interface PackageUpdateResult { version: string; restartRequired: boolean }
 export interface ProviderStats {

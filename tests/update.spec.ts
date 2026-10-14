@@ -107,6 +107,22 @@ describe('package update manager', () => {
     await expect(manager.status()).resolves.toMatchObject({ updateAvailable: true })
   })
 
+  it('个人维护版不访问 npm 或被上游覆盖', async () => {
+    const { packageRoot } = await installedProfile('0.4.4-ppyang.1')
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'dsh-reference-anything', version: '0.4.4-ppyang.1', dshFork: { repository: 'https://github.com/ppyang010/dsh-reference-anything' },
+    }))
+    const fetchLatest = vi.fn(async () => '9.0.0')
+    const fetchReleaseNotes = vi.fn(async () => ({}))
+    const install = vi.fn(async () => {})
+    const manager = new PackageUpdateManager({ packageRoot, fetchLatest, fetchReleaseNotes, install })
+    await expect(manager.check()).resolves.toMatchObject({ managedFork: true, updateAvailable: false, currentVersion: '0.4.4-ppyang.1' })
+    await expect(manager.update()).rejects.toThrow('个人 Fork')
+    expect(fetchLatest).not.toHaveBeenCalled()
+    expect(fetchReleaseNotes).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+  })
+
   it('does not invoke pnpm when npm reports the installed version', async () => {
     const { packageRoot } = await installedProfile()
     const install = vi.fn(async () => {})

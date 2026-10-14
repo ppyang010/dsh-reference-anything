@@ -38,6 +38,7 @@ export function createPickerMenuUpdater(
   inputTriggers: InputTriggerServiceContract,
   sessions: ISessions,
   schedule: ScheduleMenuMutation = mutateActiveTriggerMenu,
+  captureValidity?: (sessionId: SessionId) => () => boolean,
 ): PickerMenuUpdater {
   return (update) => {
     const actx = sessions.scope(update.sessionId)
@@ -46,8 +47,11 @@ export function createPickerMenuUpdater(
     const before = controller.menu.getSnapshot()
     if (!matches(before, update) || !before.groups.some(group => group.source === update.source)) return false
 
+    const valid = captureValidity?.(update.sessionId)
     schedule(update.source, update.anchor, () => {
+      if (valid !== undefined && !valid()) return
       const current = controller.menu.getSnapshot()
+      if (current.generation !== before.generation) return
       const base = matches(current, update)
         ? current
         : update.reopen && !current.open && current.generation === before.generation

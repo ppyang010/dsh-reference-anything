@@ -118,7 +118,7 @@ function SourceAliasIcon({ source, keyName }: { source: PickerSource; keyName: s
   return <PickerSourceLogo kind="drive" />
 }
 const REFERENCE_ANYTHING_LOGO = '__REFERENCE_ANYTHING_LOGO_DATA_URI__'
-const GITHUB_REPOSITORY_URL = 'https://github.com/Chael-Chael/dsh-reference-anything'
+const GITHUB_REPOSITORY_URL = 'https://github.com/ppyang010/dsh-reference-anything'
 export function ConversationSettings({ useScope, save, sync, cancel, refresh, refreshOpenList = async () => undefined, quickRefreshOnOpen, setupAll, discoverOpenCli, installOpenCli, useProfile, install, restartDaemon, checkUpdate, installUpdate, browse, deleteConversation, clearProvider, clearRemoteMissing, clearOldAccounts, refreshStats, openListInstall = async () => undefined, openListUpgrade = async () => undefined, openListConnectExternal = async () => undefined, openListDisconnect = async () => undefined, openListCreateMount = async () => undefined, openListDisableMount = async () => undefined, openListRemoveMount = async () => undefined, openListReindex = async () => ({ supported: false }), pickCloudDriveDownloadDirectory, pickAgentDirectory, openCloudDriveDownloadDirectory, t }: SettingsProps) {
   const state = useScope(value => value)
   const settings = state.settings
@@ -784,6 +784,7 @@ function CheckRow({ label, detail, ready, neutral = false, actionLabel, secondar
 
 function updateTitle(update: PackageUpdateStatus | undefined, t: T): string {
   if (!update) return t('settings.updateTitle')
+  if (update.managedFork) return t('settings.forkManaged', { version: update.currentVersion })
   if (update.updateAvailable) return t('settings.updateAvailable', { version: update.latestVersion })
   if (update.error) return t('settings.updateCheckFailed')
   return t('settings.upToDate', { version: update.currentVersion })
@@ -791,6 +792,7 @@ function updateTitle(update: PackageUpdateStatus | undefined, t: T): string {
 
 function updateDetail(update: PackageUpdateStatus | undefined, t: T): string {
   if (!update) return t('settings.updateCheckingAutomatically')
+  if (update.managedFork) return t('settings.forkManagedDetail')
   if (update.error) return update.error
   if (update.updateAvailable) return t('settings.updateAvailableDetail', { current: update.currentVersion, latest: update.latestVersion })
   return t('settings.upToDateDetail')

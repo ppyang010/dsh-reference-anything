@@ -287,11 +287,18 @@ describe('settings update bar', () => {
     expect(check?.textContent).toBe('Check for updates')
     expect(github?.textContent).toBe('GitHub')
     expect(github).toMatchObject({ tagName: 'A' })
-    expect((github as HTMLAnchorElement).href).toBe('https://github.com/Chael-Chael/dsh-reference-anything')
+    expect((github as HTMLAnchorElement).href).toBe('https://github.com/ppyang010/dsh-reference-anything')
     expect((github as HTMLAnchorElement).target).toBe('_blank')
 
     await act(async () => { (check as HTMLButtonElement).click() })
     expect(checkUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('个人 Fork 显示维护提示，不提供覆盖安装按钮', () => {
+    const el = renderSettings({ settings, update: { ...currentUpdate, currentVersion: '0.4.4-ppyang.1', managedFork: true } })
+    expect(el.querySelector('.dsh_ref_update_copy')?.textContent).toContain('个人维护版')
+    expect(el.querySelector('.dsh_ref_update_copy')?.textContent).toContain('不会被 npm 上游版覆盖')
+    expect(el.querySelector('.dsh_ref_update_actions .is_primary')).toBeNull()
   })
 
   it('installs an available version only after confirmation', async () => {

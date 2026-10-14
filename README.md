@@ -6,7 +6,9 @@
 
 <h1>dsh-reference-anything</h1>
 
-One `@` for them all.
+个人维护版：输入 `@@`，引用万物。
+
+> 本 Fork 使用 `0.4.4-ppyang.1`，会话标题采用 `displayTitle ?? label`，右侧显示文件夹名称、DSH 活动更新时间与主会话／分叉会话／子智能体类型。安装、回滚和已知限制请先阅读 [个人 Fork 维护说明](./FORK维护.md)。以下发布历史和截图保留上游记录；定制版的新入口是 `@@`，已插入引用仍保持官方单 `@` 语法。
 
 **English** · [简体中文](./README_zh-CN.md)
 

@@ -1,7 +1,12 @@
 {
   "name": "dsh-reference-anything",
-  "version": "0.4.4",
-  "description": "Reference files, sessions, commands, skills, and historical external AI chats from the DSH @ menu.",
+  "version": "0.4.4-ppyang.1",
+  "description": "DSH @@ 引用菜单：文件、会话、命令、技能及外部 AI 历史记录。",
+  "dshFork": {
+    "upstream": "Chael-Chael/dsh-reference-anything",
+    "upstreamCommit": "5e737356862302694a754b0dc97cb3c7c53003ef",
+    "repository": "https://github.com/ppyang010/dsh-reference-anything"
+  },
   "icon": "./images/logo-icon.png",
   "license": "MIT",
   "publishConfig": {
@@ -10,7 +15,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Chael-Chael/dsh-reference-anything.git"
+    "url": "git+https://github.com/ppyang010/dsh-reference-anything.git"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -74,7 +79,8 @@
     "images/logo-icon.png",
     "images/logo-mono.png",
     "NOTICE.md",
-    "README.md"
+    "README.md",
+    "FORK维护.md"
   ],
   "dsh": {
     "bundle": {

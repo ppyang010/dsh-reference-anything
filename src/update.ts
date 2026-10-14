@@ -22,6 +22,8 @@ export interface PackageUpdateStatus {
   releaseNotes?: string
   releaseUrl?: string
   error?: string
+  /** 个人维护版不得被 npm 上游更新覆盖。 */
+  managedFork?: boolean
 }
 
 export interface PackageUpdateResult {
@@ -78,6 +80,7 @@ export class PackageUpdateManager {
   /** Install only the exact version returned by a fresh registry check. */
   async update(signal?: AbortSignal): Promise<PackageUpdateResult> {
     const status = await this.check(signal)
+    if (status.managedFork) throw new Error('个人 Fork 使用固定提交维护；请从 Fork 更新，禁止用 npm 上游覆盖本机定制版。')
     if (status.error) throw new Error(status.error)
     if (!status.updateAvailable) return { version: status.currentVersion, restartRequired: false }
     const profileDir = await findOwningProfileDir(this.packageRoot, this.dshHome)
@@ -99,6 +102,12 @@ export class PackageUpdateManager {
     let currentVersion = '0.0.0'
     try {
       currentVersion = await readPackageVersion(this.packageRoot)
+      const manifest = await readJson(join(this.packageRoot, 'package.json'))
+      if (manifest.dshFork !== undefined) {
+        const status: PackageUpdateStatus = { currentVersion, latestVersion: currentVersion, updateAvailable: false, checkedAt, managedFork: true }
+        this.cached = status
+        return status
+      }
       const tag = currentVersion.split('-')[1]?.split('.')[0] ?? 'latest'
       const latestVersion = await this.fetchLatest(signal, tag)
       const updateAvailable = compareVersions(latestVersion, currentVersion) > 0

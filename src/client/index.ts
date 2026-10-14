@@ -10,7 +10,8 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { ALL_LOCAL_AGENTS, ALL_PROVIDERS, defaultPickerSettings, samePickerSettings, pickerSourceSchema, type ChatProvider, type LocalAgent, type PickerSettings, type SettingsRecord } from '../wire.ts'
 import { REFERENCE_ANYTHING_REMOTE, type AgentCandidate, type DriveCandidate, type ReferenceAnythingRemoteFace, type SearchResult, type SyncStatus } from './remote.ts'
-import { createCloudDriveSource, createCommandSource, createConversationSource, createFileSource, createLocalAgentSource, createPluginSource, createSearchDebounce, createSessionSource, createSkillSource, type RefreshablePickerSource } from './source.ts'
+import { AGENT_SOURCE, COMMAND_SOURCE, CONVERSATION_SOURCE, DRIVE_SOURCE, FILE_SOURCE, PLUGIN_SOURCE, SESSION_SOURCE, SKILL_SOURCE, createCloudDriveSource, createCommandSource, createConversationSource, createFileSource, createLocalAgentSource, createPluginSource, createSearchDebounce, createSessionSource, createSkillSource, type RefreshablePickerSource } from './source.ts'
+import { createDoubleAtBridge } from './double-at.ts'
 import { ConversationSettings, PAGE_SIZE, type SettingsSnapshot } from './components.tsx'
 import {
   adoptMenuGroupTitleProjection, adoptMenuViewportTracking, adoptReferenceIconProjection, adoptSettingsIconProjection, adoptStyles,
@@ -219,7 +220,11 @@ export function apply(ctx: ClientContext): void {
 
   const inputTriggers = ctx.get('inputTriggers') as InputTriggerServiceContract
   const sessions = (ctx as unknown as { sessions: ISessions }).sessions
-  const updateMenu = createPickerMenuUpdater(inputTriggers, sessions)
+  const doubleAt = createDoubleAtBridge(inputTriggers, sessions, new Set([
+    CONVERSATION_SOURCE, FILE_SOURCE, SESSION_SOURCE, AGENT_SOURCE, DRIVE_SOURCE, COMMAND_SOURCE, SKILL_SOURCE, PLUGIN_SOURCE,
+  ]))
+  ctx.effect(() => () => doubleAt.dispose(), 'reference-anything.client.double-at')
+  const updateMenu = createPickerMenuUpdater(inputTriggers, sessions, undefined, id => doubleAt.capture(id))
   const guardMenuActions = createPickerMenuActionGuard(inputTriggers, sessions)
   let sourceDisposers: Array<() => void> = []
   let appliedPicker: PickerSettings | undefined
@@ -260,6 +265,7 @@ export function apply(ctx: ClientContext): void {
       displayMode: picker.displayMode,
       updateMenu,
       guardMenuActions,
+      doubleAt,
     })
     const source = createConversationSource((query, provider, signal, limit) =>
       conversationSearch.run(query, signal, async () => {
@@ -299,10 +305,15 @@ export function apply(ctx: ClientContext): void {
       const result = await ctx.remote.fileReferences.list(sessionId, query, signal)
       return result.ok ? result.value : []
     }, t, optionsFor('files'))))
-    if (picker.sessions.enabled) disposers.push(inputTriggers.registerSource(createSessionSource(async (sessionId, query, signal) => {
-      const result = await ctx.remote.sessionReferenceResolver.candidates(sessionId, query, signal)
-      return result.ok ? result.value : []
-    }, t, optionsFor('sessions'))))
+    if (picker.sessions.enabled) {
+      const sessionSource = createSessionSource(async (sessionId, query, signal) => {
+        const result = await ctx.remote.sessionReferenceResolver.candidates(sessionId, query, signal)
+        return result.ok ? result.value : []
+      }, t, optionsFor('sessions'), () => sessions.list.getSnapshot().byId)
+      disposers.push(inputTriggers.registerSource(sessionSource))
+      // 已开菜单仅重投影元数据；列表事件不增加候选 RPC 或日志读取。
+      if (sessions.list !== undefined) disposers.push(sessions.list.subscribe(() => sessionSource.refreshPresentation?.()))
+    }
     if (picker.agents.enabled) disposers.push(inputTriggers.registerSource(createLocalAgentSource((sessionId, query, signal, limit) =>
       agentSearch.run(query, signal, async () => {
         // Re-read after the debounce, as the conversation source does above.

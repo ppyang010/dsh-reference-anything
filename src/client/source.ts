@@ -16,6 +16,8 @@ import {
 } from './provider-icons.tsx'
 import type { REFERENCE_ANYTHING_NS } from './locale.ts'
 import type { MenuViewportAnchor, PickerMenuActionGuard, PickerMenuUpdater } from './menu-update.ts'
+import { describeSession, sortSessionCandidates, type SessionPresentationIndex } from './session-presentation.ts'
+import type { DoubleAtBridge } from './double-at.ts'
 
 const LABEL: Record<ChatProvider, string> = {
   chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', deepseek: 'DeepSeek', grok: 'Grok', kimi: 'Kimi',
@@ -107,11 +109,15 @@ export interface PickerSourceOptions {
   updateMenu?: PickerMenuUpdater
   /** Prevents native handled picks for this source from unmounting the menu. */
   guardMenuActions?: PickerMenuActionGuard
+  /** 运行时使用双 @；保留原始 query 作为显示缓存和展开动作的身份。 */
+  doubleAt?: DoubleAtBridge
 }
 
 export interface RefreshablePickerSource extends InputTriggerSource {
   /** Re-publish cached menus, optionally refreshing their backing candidates first. */
   refreshCachedMenu(options?: { refetch?: boolean }): Promise<void>
+  /** 仅刷新已取得候选的展示元数据，不调用远程搜索。 */
+  refreshPresentation?(): void
 }
 
 export interface ConversationSourceActions {
@@ -346,19 +352,32 @@ export function createSessionSource(
   search: (sessionId: SessionId, query: string, signal: AbortSignal) => Promise<readonly SessionReferenceMentionCandidate[]>,
   t: T = fallback,
   options: PickerSourceOptions = { ...DEFAULT_SOURCE_OPTIONS, order: 20 },
+  readSummaries: () => SessionPresentationIndex = () => ({}),
 ): RefreshablePickerSource {
+  const presentationRows = new Map<SessionId, readonly SessionReferenceMentionCandidate[]>()
+  const project = (rows: readonly SessionReferenceMentionCandidate[]): InputTriggerCandidate[] => {
+    const summaries = readSummaries()
+    return sortSessionCandidates(rows, summaries, options.sort).map(row => {
+      const label = row.displayTitle ?? row.label
+      return {
+        name: label,
+        description: describeSession(row, summaries[row.sessionId], t),
+        icon: candidateIcon(SESSION_ICON_MARKER),
+        value: encodeCandidate({ kind: 'session', label, mention: row.mention }),
+      }
+    })
+  }
   const source: InputTriggerSource = {
     trigger: '@', name: SESSION_SOURCE, order: options.order,
     async candidates(session, { query, quoted, signal }) {
       if (quoted === true) return []
       const scoped = scopedQuery(query, 'sessions', options.shortcut, options.shortcuts)
       if (scoped === undefined) return []
-      return (await search(session.sessionId, scoped, signal)).map(row => ({
-        name: row.label,
-        description: [row.cwd, new Date(row.createdAt).toLocaleString()].filter(Boolean).join(' · '),
-        icon: candidateIcon(SESSION_ICON_MARKER),
-        value: encodeCandidate({ kind: 'session', label: row.label, mention: row.mention }),
-      }))
+      const rows = await search(session.sessionId, scoped, signal)
+      if (signal.aborted) return []
+      // 查询结束后读取最新列表快照，避免异步期间的活动时间或身份变化丢失。
+      presentationRows.set(session.sessionId, rows)
+      return project(rows)
     },
     onPick({ candidate }) {
       const value = decodeCandidate(candidate.value)
@@ -375,7 +394,8 @@ export function createSessionSource(
     },
     codec: { clipboardText: ref => ref, serialize: ref => Promise.resolve(ref) },
   }
-  return withDisplayPolicy(source, options, t)
+  return withDisplayPolicy(source, options, t, candidate => candidate, false,
+    session => project(presentationRows.get(session.sessionId) ?? []))
 }
 
 /**
@@ -529,7 +549,7 @@ export function createCloudDriveSource(
     },
     onPick({ candidate }) {
       const value = decodeCandidate(candidate.value)
-      if (value?.kind === 'drive-search') return { text: '@drive:' }
+      if (value?.kind === 'drive-search') return { text: '@drive:', continue: true }
       if (value?.kind === 'drive-folder') return { text: `@"drive:${value.path.replace(/\/+$/u, '') || ''}/`, continue: true }
       if (value?.kind !== 'drive') return undefined
       const reference = value.reference
@@ -706,6 +726,7 @@ export function createPluginSource(
 interface CachedSourceCandidates {
   session: ClientSessionContext
   request: Pick<CandidateRequest, 'query' | 'quoted' | 'position' | 'drilled'>
+  logicalRequest: Pick<CandidateRequest, 'query' | 'quoted' | 'position' | 'drilled'>
   pinned: InputTriggerCandidate[]
   normal: InputTriggerCandidate[]
   revision: number
@@ -717,10 +738,11 @@ function withDisplayPolicy(
   t: T,
   refreshPinned: (candidate: InputTriggerCandidate) => InputTriggerCandidate = candidate => candidate,
   staleWhileRevalidate = false,
+  reproject?: (session: ClientSessionContext) => readonly InputTriggerCandidate[],
 ): RefreshablePickerSource {
   const expandedStates = new Map<SessionId, { query: string; visibleCount: number }>()
   const caches = new Map<SessionId, CachedSourceCandidates>()
-  const refreshing = new Set<SessionId>()
+  const refreshing = new Map<SessionId, AbortSignal>()
   const present = (cache: CachedSourceCandidates): InputTriggerCandidate[] => {
     const { normal, pinned } = cache
     if (options.displayMode === 'native-scroll' || normal.length <= options.limit) return [...pinned, ...normal]
@@ -761,9 +783,11 @@ function withDisplayPolicy(
     request: Pick<CandidateRequest, 'query' | 'quoted' | 'position' | 'drilled'>,
     all: readonly InputTriggerCandidate[],
     revision: number,
+    logicalRequest: Pick<CandidateRequest, 'query' | 'quoted' | 'position' | 'drilled'> = request,
   ): CachedSourceCandidates => ({
     session,
     request,
+    logicalRequest,
     pinned: all.filter(isSyncAction),
     normal: all.filter(candidate => !isSyncAction(candidate)).slice(0, options.maxCandidates),
     revision,
@@ -772,30 +796,35 @@ function withDisplayPolicy(
   return {
     ...source,
     async candidates(session, request) {
+      // 门控必须先于缓存、SWR 和底层搜索，单 @ 不能重用旧候选或发请求。
+      const logicalRequest = options.doubleAt === undefined ? request : options.doubleAt.request(session, request)
+      if (logicalRequest === undefined) return []
+      // 新作用域即使命中旧 SWR 缓存，也必须先安装展开动作保护。
+      options.guardMenuActions?.(session.sessionId, source.name)
       const previous = caches.get(session.sessionId)
       if (staleWhileRevalidate && previous !== undefined
         && previous.request.query === request.query && previous.request.quoted === request.quoted
         && previous.request.position === request.position) {
-        if (!refreshing.has(session.sessionId)) {
-          refreshing.add(session.sessionId)
+        if (refreshing.get(session.sessionId) === undefined || refreshing.get(session.sessionId)!.aborted) {
+          refreshing.set(session.sessionId, request.signal)
           const revision = previous.revision + 1
           previous.revision = revision
-          void source.candidates(session, request).then((all) => {
+          void source.candidates(session, logicalRequest).then((all) => {
             if (request.signal.aborted || caches.get(session.sessionId) !== previous || previous.revision !== revision) return
-            const refreshed = cacheCandidates(session, request, all, revision)
+            const refreshed = cacheCandidates(session, request, all, revision, logicalRequest)
             caches.set(session.sessionId, refreshed)
             publish(refreshed, false)
           }).catch(() => { /* Keep the stale candidates on refresh failure. */ })
-            .finally(() => refreshing.delete(session.sessionId))
+            .finally(() => { if (refreshing.get(session.sessionId) === request.signal) refreshing.delete(session.sessionId) })
         }
         return present(previous)
       }
-      const all = await source.candidates(session, request)
+      const all = await source.candidates(session, logicalRequest)
+      if (request.signal.aborted) return []
       const cache = cacheCandidates(session, {
         query: request.query, quoted: request.quoted, position: request.position, drilled: request.drilled,
-      }, all, (previous?.revision ?? 0) + 1)
+      }, all, (previous?.revision ?? 0) + 1, logicalRequest)
       if (!request.signal.aborted) caches.set(session.sessionId, cache)
-      options.guardMenuActions?.(session.sessionId, source.name)
       return present(cache)
     },
     onPick(pick) {
@@ -818,11 +847,32 @@ function withDisplayPolicy(
         const cache = caches.get(pick.session.sessionId)
         if (cache !== undefined) publish(cache, true, 'first')
       }
-      return outcome
+      return options.doubleAt?.continuation(outcome) ?? outcome
     },
+    ...(source.matchSpace === undefined ? {} : {
+      matchSpace(session: ClientSessionContext, token: string) {
+        const logical = options.doubleAt === undefined ? token : options.doubleAt.space(session, token)
+        return logical === undefined ? undefined : source.matchSpace!(session, logical)
+      },
+    }),
+    ...(reproject === undefined ? {} : {
+      refreshPresentation() {
+        for (const current of caches.values()) {
+          if (options.doubleAt !== undefined && !options.doubleAt.isCurrent(current.session, current.request)) continue
+          const normal = reproject(current.session).filter(candidate => !isSyncAction(candidate)).slice(0, options.maxCandidates)
+          if (normal.length === current.normal.length && normal.every((candidate, index) => {
+            const previous = current.normal[index]
+            return candidate.name === previous?.name && candidate.description === previous?.description && candidate.value === previous?.value
+          })) continue
+          current.normal = [...normal]
+          publish(current, false)
+        }
+      },
+    }),
     async refreshCachedMenu(refreshOptions = {}) {
       const work: Promise<void>[] = []
       for (const [sessionId, current] of caches) {
+        if (options.doubleAt !== undefined && !options.doubleAt.isCurrent(current.session, current.request)) continue
         if (refreshOptions.refetch !== true) {
           current.pinned = current.pinned.map(refreshPinned)
           publish(current, false)
@@ -831,9 +881,11 @@ function withDisplayPolicy(
         const revision = current.revision + 1
         current.revision = revision
         const controller = new AbortController()
-        work.push(source.candidates(current.session, { ...current.request, signal: controller.signal }).then((all) => {
+        const valid = options.doubleAt?.capture(sessionId)
+        work.push(source.candidates(current.session, { ...current.logicalRequest, signal: controller.signal }).then((all) => {
+          if (valid !== undefined && !valid()) return
           if (caches.get(sessionId) !== current || current.revision !== revision) return
-          const refreshed = cacheCandidates(current.session, current.request, all, revision)
+          const refreshed = cacheCandidates(current.session, current.request, all, revision, current.logicalRequest)
           caches.set(sessionId, refreshed)
           publish(refreshed, false)
         }).catch(() => { /* Keep the last visible candidates on refresh failure. */ }))
@@ -916,6 +968,10 @@ function formatDate(value: string, t: T): string {
 const fallback: T = (key, params) => {
   const dictionary: Record<string, string> = {
     'plugin.status.live': 'Running', 'plugin.status.disabled': 'Disabled', 'plugin.status.inert': 'Not running',
+    'session.noFolder': 'No folder', 'session.rootFolder': 'Root folder',
+    'session.updated': 'Updated {date}', 'session.unknownUpdated': 'Update time unknown',
+    'session.type.main': 'Main session', 'session.type.fork': 'Forked session',
+    'session.type.subagent': 'Subagent', 'session.type.unknown': 'Type unknown',
     'source.conversations': 'External conversations', 'source.files': 'Files and folders', 'source.sessions': 'DSH sessions', 'source.agents': 'Local agent conversations', 'source.drives': 'Cloud drive files', 'source.commands': 'Commands', 'source.skills': 'Skills', 'source.plugins': 'All local plugins',
     'conversation.description': '{provider} · {date}', 'drive.description': '{provider} · {path}', 'drive.searchIncomplete': 'Results may be incomplete', 'drive.searchAction': 'Search cloud drive files…', 'drive.searchActionDetail': 'Select, then type a filename, for example @drive:notes', 'drive.parentFolder': 'Parent folder', 'conversation.unknownDate': 'unknown date', 'skill.userOnly': 'user-only · ',
     'menu.syncAll': 'Sync all now', 'menu.syncAllDetail': 'Refresh the local external-conversation index',

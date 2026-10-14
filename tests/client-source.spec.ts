@@ -196,7 +196,7 @@ describe('native @ sources', () => {
     }])
     const candidate = (await source.candidates(session, request()))[0]!
     expect(candidate.icon).toBe(PICKER_ICON_MARKER.session)
-    expect(candidate.description).toBe(`fixture-repo · ${new Date(1).toLocaleString()}`)
+    expect(candidate.description).toBe('fixture-repo · Update time unknown · Type unknown')
     const outcome = source.onPick(pick(candidate))
     if (outcome === undefined || outcome === 'handled' || !('insert' in outcome)) throw new Error('expected insert')
     expect(outcome.insert).toMatchObject({

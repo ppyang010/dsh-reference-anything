@@ -65,7 +65,7 @@ export const openCliDiscoverySchema = z.object({
 }).readonly()
 export const packageUpdateStatusSchema = z.object({
   currentVersion: z.string(), latestVersion: z.string(), updateAvailable: z.boolean(),
-  checkedAt: z.number().int().nonnegative(), releaseNotes: z.string().max(12_000).optional(), releaseUrl: z.string().url().optional(), error: z.string().optional(),
+  checkedAt: z.number().int().nonnegative(), releaseNotes: z.string().max(12_000).optional(), releaseUrl: z.string().url().optional(), error: z.string().optional(), managedFork: z.boolean().optional(),
 }).readonly()
 export const packageUpdateResultSchema = z.object({
   version: z.string(), restartRequired: z.boolean(),
